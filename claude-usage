@@ -1,0 +1,518 @@
+#!/usr/bin/python3
+"""Live-Ansicht des Claude-Code-Verbrauchs im Terminal.
+
+Limits kommen von `omarchy-agent-usage-claude` (Anthropics OAuth-Endpoint),
+die Token-Zahlen aus einem eigenen Scan der Transcripts unter
+~/.claude/projects — der Collector liefert keine Aufschlüsselung pro Session.
+
+Aufruf:  claude-usage            einmalig
+         claude-usage -w [SEK]   live, Default 60 s
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+from types import SimpleNamespace
+
+COLLECTOR = "omarchy-agent-usage-claude"   # liefert Tarif und Limits
+WINDOW_HOURS = 24
+GRAPH_ROWS = 8
+
+# Grundbreite; alles darüber hinaus geht an die Balken bzw. Session-Namen.
+BASE_INNER = 84
+MIN_WIDTH = 86
+MAX_WIDTH = 200
+GRAPH_LABELS = (5, 6, 5)   # "12-15", "10.09.", "KW 37"
+VALUE_CHARS = 8            # rechte Zahlenspalte der Graphen
+PROJECT_MIN = 12           # ab dieser Breite lohnt die Projektspalte
+PROJECT_MAX = 28
+
+USAGE_KEYS = (
+    ("input_tokens", "inputTokens"),
+    ("output_tokens", "outputTokens"),
+    ("cache_read_input_tokens", "cacheReadInputTokens"),
+    ("cache_creation_input_tokens", "cacheCreationInputTokens"),
+)
+
+
+# ------------------------------------------------------------------ Farbe
+
+ANSI = re.compile(r"\033\[[0-9;]*m")
+RESET = "\033[0m"
+DIM = "\033[2m"
+
+# Stützstellen des btop-Verlaufs: grün → gelb → rot.
+GRADIENT = ((0.0, (80, 200, 120)), (0.5, (235, 190, 70)), (1.0, (225, 70, 70)))
+
+# Wochenende im Tagesraster; Mo–Fr bleibt in der Terminalfarbe.
+WEEKEND = {5: (205, 145, 75), 6: (200, 100, 95)}   # Sa dezent orange, So dezent rot
+
+
+def use_color() -> bool:
+    return (
+        sys.stdout.isatty()
+        and os.environ.get("NO_COLOR") is None
+        and os.environ.get("TERM") != "dumb"
+    )
+
+
+def gradient(pos: float) -> tuple[int, int, int]:
+    """Farbe an relativer Position 0..1, linear zwischen den Stützstellen."""
+    pos = min(max(pos, 0.0), 1.0)
+    for (low, start), (high, end) in zip(GRADIENT, GRADIENT[1:]):
+        if pos <= high:
+            share = (pos - low) / (high - low) if high > low else 0.0
+            return tuple(round(a + (b - a) * share) for a, b in zip(start, end))
+    return GRADIENT[-1][1]
+
+
+def paint(filled: str, width: int, track: str) -> str:
+    """Balken einfärben: jedes Zeichen nach seiner Position, Rest gedimmt.
+
+    Die Farbe hängt an der Position im Balken, nicht am Wert — ein kurzer
+    Balken bleibt dadurch grün, ein langer läuft über orange nach rot aus.
+    """
+    rest = track * (width - len(filled))
+    if not use_color():
+        return filled + rest
+    span = max(width - 1, 1)
+    body = "".join(
+        "\033[38;2;{};{};{}m{}".format(*gradient(i / span), char)
+        for i, char in enumerate(filled)
+    )
+    return (body + RESET if body else "") + (DIM + rest + RESET if rest else "")
+
+
+def tint(text: str, color) -> str:
+    """Text einfärben. Muss nach dem Ausrichten passieren — die Escape-Codes
+    zählen sonst in die Feldbreite."""
+    if color is None or not use_color():
+        return text
+    return "\033[38;2;{};{};{}m{}{}".format(*color, text, RESET)
+
+
+def visible_len(text: str) -> int:
+    return len(ANSI.sub("", text))
+
+
+# ------------------------------------------------------------------ Layout
+
+def build_layout() -> SimpleNamespace:
+    """Spaltenbreiten für die aktuelle Terminalbreite.
+
+    Die drei Blöcke müssen dieselbe Innenbreite ergeben, sonst passen die
+    Trennlinien nicht aufeinander:
+        sum(limits) + 3 == sum(tokens) + 4 == sum(graph) + 2 == inner
+    """
+    columns = shutil.get_terminal_size((MIN_WIDTH, 24)).columns
+    inner = max(MIN_WIDTH, min(columns, MAX_WIDTH)) - 2
+    extra = inner - BASE_INNER
+
+    # Ab genug Zusatzbreite bekommt die Token-Tabelle wieder eine Spalte für das
+    # Arbeitsverzeichnis; das eine Zeichen geht an ihren zusätzlichen Trenner.
+    if extra >= PROJECT_MIN + 1:
+        project = min(PROJECT_MAX, max(PROJECT_MIN, (extra - 1) // 3))
+        tokens = (30 + extra - 1 - project, 11, 11, 11, 17, project)
+    else:
+        tokens = (30 + extra, 11, 11, 11, 17)
+
+    share = [extra // 3 + (1 if i < extra % 3 else 0) for i in range(3)]
+    return SimpleNamespace(
+        inner=inner,
+        limits=(22, 7, 32 + extra, 20),          # Fenster, Prozent, Balken, Reset
+        tokens=tokens,                           # Name, heute, 24 h, gesamt, seit [, Projekt]
+        graph=(27 + share[0], 28 + share[1], 27 + share[2]),
+    )
+
+
+# ------------------------------------------------------------------ Formatierung
+
+def tokens(n: int) -> str:
+    """1234 -> '1.2k', 1231000 -> '1.231M'. Bei M werden Nullen getrimmt."""
+    if n >= 999_950:  # ab hier rundete die k-Darstellung auf 1000.0k auf
+        return f"{n / 1_000_000:.3f}".rstrip("0").rstrip(".") + "M"
+    if n >= 1000:
+        return f"{n / 1000:.1f}k"
+    return str(n)
+
+
+def bar(pct: float, width: int) -> str:
+    return paint("█" * int(pct * width), width, "·")
+
+
+# ------------------------------------------------------------------ Tabelle
+
+def cell(text: str, width: int, right: bool = False) -> str:
+    """Zelleninhalt mit je einem Leerzeichen Rand, exakt `width` sichtbare Zeichen."""
+    room = width - 2
+    pad = room - visible_len(text)
+    if pad < 0:                       # nur ungefärbter Text wird je zu lang
+        return " " + text[:room] + " "
+    return " " + (" " * pad + text if right else text + " " * pad) + " "
+
+
+def row(cells: list[str]) -> str:
+    return "│" + "│".join(cells) + "│"
+
+
+def full_row(text: str, inner: int) -> str:
+    return row([cell(text, inner)])
+
+
+def boundaries(widths) -> set[int]:
+    """Zeichen-Offsets, an denen in einer Zeile ein │ steht."""
+    marks, pos = set(), 0
+    for width in widths[:-1]:
+        pos += width
+        marks.add(pos)
+        pos += 1
+    return marks
+
+
+def separator(above, below, inner: int) -> str:
+    """Trennlinie zwischen zwei Blöcken; setzt ┬ ┴ ┼ an die Spaltengrenzen."""
+    top, bottom = boundaries(above or ()), boundaries(below or ())
+    left = "├" if above and below else ("┌" if below else "└")
+    right = "┤" if above and below else ("┐" if below else "┘")
+    middle = "".join(
+        "┼" if i in top and i in bottom else
+        "┴" if i in top else
+        "┬" if i in bottom else "─"
+        for i in range(inner)
+    )
+    return left + middle + right
+
+
+def dots(value: int, peak: int, width: int) -> str:
+    """btop-artiger Balken aus Braille-Punkten.
+
+    Ein Braille-Zeichen ist zwei Punktspalten breit, der Balken hat also die
+    doppelte Auflösung seiner Zeichenbreite. Ein Wert > 0 bekommt immer
+    mindestens einen halben Punkt, damit er nicht als leer durchgeht.
+    """
+    if peak <= 0:
+        return paint("", width, "·")
+    steps = round(value / peak * width * 2)
+    if value > 0 and steps == 0:
+        steps = 1
+    full, half = divmod(steps, 2)
+    return paint("⣿" * full + ("⡇" if half else ""), width, "·")
+
+
+def parse_ts(value):
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return dt.datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone()
+    except ValueError:
+        return None
+
+
+def when(moment: dt.datetime) -> str:
+    today = dt.datetime.now().astimezone().date()
+    day = moment.date()
+    if day == today:
+        return f"heute {moment:%H:%M}"
+    if day == today - dt.timedelta(days=1):
+        return f"gestern {moment:%H:%M}"
+    return f"{moment:%d.%m. %H:%M}"
+
+
+def clip(text: str, width: int) -> str:
+    return text if len(text) <= width else text[:width] + "..."
+
+
+def label_for(cwd: str) -> str:
+    home = str(Path.home())
+    if cwd == home:
+        return "~"
+    if cwd.startswith(home + "/"):
+        return "~/" + cwd[len(home) + 1:]
+    return cwd or "?"
+
+
+# ------------------------------------------------------------------ Transcripts
+
+def scan(projects: Path) -> dict:
+    """Token pro Session, dedupliziert über die Message-ID.
+
+    Eine Message-ID taucht mehrfach auf, solange die Antwort streamt; die
+    Zeilen tragen wachsende output_tokens. Gezählt wird deshalb das letzte
+    Vorkommen (finale usage), nicht das erste.
+    """
+    now = dt.datetime.now().astimezone()
+    today = now.date()
+    cutoff = now - dt.timedelta(hours=WINDOW_HOURS)
+
+    messages: dict[str, tuple] = {}   # message id -> (session, ts, total)
+    starts: dict[str, dt.datetime] = {}
+    cwds: dict[str, str] = {}
+    titles: dict[str, str] = {}
+
+    if not projects.is_dir():
+        empty = [("", 0, None)] * GRAPH_ROWS
+        return {"total_today": 0, "total_window": 0, "sessions": [],
+                "prompts_today": 0, "graph": (empty, empty, empty)}
+
+    for path in sorted(projects.rglob("*.jsonl")):
+        try:
+            handle = path.open("r", encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        with handle:
+            for number, line in enumerate(handle, 1):
+                try:
+                    entry = json.loads(line)
+                except ValueError:
+                    continue
+
+                session = entry.get("sessionId")
+                stamp = parse_ts(entry.get("timestamp"))
+
+                # Claude Code schreibt den Session-Titel als eigene Zeile und
+                # aktualisiert ihn im Verlauf; das letzte Vorkommen gilt.
+                if entry.get("type") == "ai-title" and session:
+                    title = (entry.get("aiTitle") or "").strip()
+                    if title:
+                        titles[session] = title
+
+                if session:
+                    if stamp and (session not in starts or stamp < starts[session]):
+                        starts[session] = stamp
+                    # Sidechains (Subagenten) laufen im cwd des Parents; der
+                    # erste Treffer gewinnt und ist der der Hauptsession.
+                    if entry.get("cwd") and session not in cwds:
+                        cwds[session] = entry["cwd"]
+
+                if '"usage":' not in line:
+                    continue
+                message = entry.get("message") if isinstance(entry.get("message"), dict) else {}
+                if entry.get("type") != "assistant" and message.get("role") != "assistant":
+                    continue
+                usage = message.get("usage") or entry.get("usage")
+                if not isinstance(usage, dict):
+                    continue
+
+                total = 0
+                for snake, camel in USAGE_KEYS:
+                    try:
+                        total += int(usage.get(snake) or usage.get(camel) or 0)
+                    except (TypeError, ValueError):
+                        pass
+                if total <= 0:
+                    continue
+
+                key = str(message.get("id") or entry.get("messageId") or f"{path}:{number}")
+                messages[key] = (str(session or path), stamp, total)
+
+    # Zeitraster der Graphen. Taktgebunden statt relativ zu "jetzt", damit die
+    # Beschriftung stimmt — der jüngste Block ist dadurch noch unvollständig.
+    block = now.replace(hour=(now.hour // 3) * 3, minute=0, second=0, microsecond=0)
+    hours = [block - dt.timedelta(hours=3 * i) for i in reversed(range(GRAPH_ROWS))]
+    days = [today - dt.timedelta(days=i) for i in reversed(range(GRAPH_ROWS))]
+    monday = today - dt.timedelta(days=today.weekday())
+    weeks = [monday - dt.timedelta(weeks=i) for i in reversed(range(GRAPH_ROWS))]
+    by_hour = dict.fromkeys(hours, 0)
+    by_day = dict.fromkeys(days, 0)
+    by_week = dict.fromkeys(weeks, 0)
+
+    per_session: dict[str, dict] = {}
+    total_today = total_window = prompts_today = 0
+    for session, stamp, total in messages.values():
+        row = per_session.setdefault(session, {"today": 0, "window": 0, "lifetime": 0, "last": None})
+        row["lifetime"] += total
+        if stamp:
+            if row["last"] is None or stamp > row["last"]:
+                row["last"] = stamp
+            if stamp.date() == today:
+                row["today"] += total
+                total_today += total
+                prompts_today += 1
+            if stamp >= cutoff:
+                row["window"] += total
+                total_window += total
+
+            slot = stamp.replace(hour=(stamp.hour // 3) * 3, minute=0, second=0, microsecond=0)
+            if slot in by_hour:
+                by_hour[slot] += total
+            day = stamp.date()
+            if day in by_day:
+                by_day[day] += total
+            week = day - dt.timedelta(days=day.weekday())
+            if week in by_week:
+                by_week[week] += total
+
+    sessions = []
+    for session, row in per_session.items():
+        if not row["window"]:
+            continue
+        sessions.append({
+            "id": session,
+            "name": titles.get(session) or session[:8],
+            "cwd": label_for(cwds.get(session, "")),
+            "start": starts.get(session),
+            **row,
+        })
+    sessions.sort(key=lambda s: s["window"], reverse=True)
+
+    return {
+        "total_today": total_today,
+        "total_window": total_window,
+        "prompts_today": prompts_today,
+        "sessions": sessions,
+        "graph": (
+            [(f"{h:%H}-{h + dt.timedelta(hours=3):%H}", by_hour[h], None) for h in hours],
+            [(f"{d:%d.%m.}", by_day[d], WEEKEND.get(d.weekday())) for d in days],
+            [(f"KW {w.isocalendar()[1]:02d}", by_week[w], None) for w in weeks],
+        ),
+    }
+
+
+# ------------------------------------------------------------------ Collector
+
+def limits() -> dict:
+    """Limits vom Omarchy-Collector.
+
+    Fehlt er, bleibt nur dieser Block leer — die Token-Zahlen stammen aus dem
+    eigenen Transcript-Scan und funktionieren auch ohne Omarchy.
+    """
+    if shutil.which(COLLECTOR) is None:
+        return {"note": f"{COLLECTOR} nicht gefunden — die Limits brauchen Omarchy."}
+    try:
+        raw = subprocess.run(
+            [COLLECTOR, "--limits-only"], capture_output=True, text=True, timeout=60,
+        )
+        return json.loads(raw.stdout)
+    except Exception as exc:
+        return {"note": f"Limits nicht abrufbar: {exc.__class__.__name__}."}
+
+
+# ------------------------------------------------------------------ Ausgabe
+
+def render() -> str:
+    lay = build_layout()
+    record = limits()
+    projects = Path(os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude").expanduser() / "projects"
+    stats = scan(projects)
+    name_chars = lay.tokens[0] - 5      # Zellinhalt minus die drei Punkte
+
+    tier = record.get("tierLabel")
+    # Eigene Scan-Zeit, nicht record.updatedAt: die Token-Zahlen unten stammen
+    # aus diesem Scan. Der Collector cacht seinen Transcript-Scan 900 s, seine
+    # Limits höchstens 15 s — die sind also nie nennenswert älter.
+    stamp = dt.datetime.now().astimezone()
+
+    out = [separator(None, (lay.inner,), lay.inner)]
+
+    # Kopf: Tarif links, Prompts und Scan-Zeitpunkt rechts.
+    left = f"Claude Code — {tier}" if tier else "Claude Code"
+    right = f"{stats['prompts_today']} Prompts heute · Stand {stamp:%H:%M:%S %Z}"
+    gap = max(1, lay.inner - 2 - len(left) - len(right))
+    out.append(full_row(left + " " * gap + right, lay.inner))
+
+    # Limits
+    rows = record.get("limits") or []
+    out.append(separator((lay.inner,), lay.limits if rows else (lay.inner,), lay.inner))
+    if rows:
+        for limit in rows:
+            pct = float(limit.get("percent") or 0)
+            reset = parse_ts(limit.get("resetsAt"))
+            out.append(row([
+                cell(str(limit.get("label", "")), lay.limits[0]),
+                cell(f"{int(pct * 100)}%", lay.limits[1], right=True),
+                cell(bar(pct, lay.limits[2] - 2), lay.limits[2]),
+                cell(f"Reset {reset:%d.%m. %H:%M}" if reset else "—", lay.limits[3]),
+            ]))
+    else:
+        hint = record.get("authHelpText") or record.get("note") or "Keine Limits verfügbar."
+        out.append(full_row(hint, lay.inner))
+
+    # Tokens: Kopfzeile und Gesamtsumme
+    out.append(separator(lay.limits if rows else (lay.inner,), lay.tokens, lay.inner))
+    project = len(lay.tokens) > 5
+    out.append(row([
+        cell("Tokens", lay.tokens[0]),
+        cell("heute", lay.tokens[1], right=True),
+        cell(f"{WINDOW_HOURS} h", lay.tokens[2], right=True),
+        cell("gesamt", lay.tokens[3], right=True),
+        cell("seit", lay.tokens[4]),
+    ] + ([cell("Projekt", lay.tokens[5])] if project else [])))
+    out.append(separator(lay.tokens, lay.tokens, lay.inner))
+    out.append(row([
+        cell("Alle Sessions", lay.tokens[0]),
+        cell(tokens(stats["total_today"]), lay.tokens[1], right=True),
+        cell(tokens(stats["total_window"]), lay.tokens[2], right=True),
+        cell("", lay.tokens[3], right=True),
+        cell("", lay.tokens[4]),
+    ] + ([cell("", lay.tokens[5])] if project else [])))
+
+    # Eine Zeile je Session mit Aktivität im Fenster
+    if stats["sessions"]:
+        out.append(separator(lay.tokens, lay.tokens, lay.inner))
+        for session in stats["sessions"]:
+            out.append(row([
+                cell(clip(session["name"], name_chars), lay.tokens[0]),
+                cell(tokens(session["today"]), lay.tokens[1], right=True),
+                cell(tokens(session["window"]), lay.tokens[2], right=True),
+                cell(tokens(session["lifetime"]), lay.tokens[3], right=True),
+                cell(when(session["start"]) if session["start"] else "—", lay.tokens[4]),
+            ] + ([cell(session["cwd"], lay.tokens[5])] if project else [])))
+
+    # Drei Verlaufsspalten, je Spalte auf das eigene Maximum skaliert — die
+    # Größenordnungen von 3 h, Tag und Woche liegen zu weit auseinander.
+    series = stats["graph"]
+    peaks = [max((value for _, value, _ in column), default=0) for column in series]
+    out.append(separator(lay.tokens, lay.graph, lay.inner))
+    out.append(row([
+        cell(f"{WINDOW_HOURS} h · 3 h je Zeile", lay.graph[0]),
+        cell(f"{GRAPH_ROWS} Tage", lay.graph[1]),
+        cell(f"{GRAPH_ROWS} Wochen", lay.graph[2]),
+    ]))
+    out.append(separator(lay.graph, lay.graph, lay.inner))
+    for index in range(GRAPH_ROWS):
+        cells = []
+        for width, label_chars, column, peak in zip(lay.graph, GRAPH_LABELS, series, peaks):
+            label, value, color = column[index]
+            bar_chars = width - 2 - label_chars - 2 - VALUE_CHARS
+            cells.append(cell(
+                f"{tint(f'{label:<{label_chars}}', color)} {dots(value, peak, bar_chars)} "
+                f"{tokens(value):>{VALUE_CHARS}}",
+                width,
+            ))
+        out.append(row(cells))
+
+    out.append(separator(lay.graph, None, lay.inner))
+    return "\n".join(out)
+
+
+def main() -> int:
+    argv = sys.argv[1:]
+    if argv and argv[0] in ("-h", "--help"):
+        print(__doc__.strip())
+        return 0
+    if argv and argv[0] in ("-w", "--watch"):
+        # Der Collector drosselt den Limits-Endpoint auf 15 s; schneller zu
+        # pollen bringt keine frischeren Zahlen, nur Last.
+        interval = max(15.0, float(argv[1]) if len(argv) > 1 else 60.0)
+        while True:
+            text = render()
+            os.system("clear")
+            print(text, flush=True)
+            time.sleep(interval)
+    print(render())
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(130)
