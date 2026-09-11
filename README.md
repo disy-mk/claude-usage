@@ -98,12 +98,14 @@ consumption in that window. A `0` under `heute` means the session ran
 yesterday but still falls inside the rolling window. The `heute` and `24 h`
 columns add up exactly to the `Alle Sessions` row.
 
-**Session names** come from the `ai-title` (or `agent-name`) records Claude Code
-writes into the transcripts — the title it gives a session and refines as it
-goes; the last one wins. Sessions without one fall back to the first 8
-characters of their id. Names are resolved on the machine that owns the
-session, so a remote showing bare ids is usually running an older Claude Code
-or an older copy of this script.
+**Session names** come from the title records Claude Code writes into the
+transcripts — `custom-title` (one you set yourself) wins over `ai-title` (the
+one Claude generates and refines), with `agent-name` as a last resort; within
+one kind the newest wins. Which of these a given Claude Code version writes,
+and what it calls the field inside, varies, so the value is read generically
+rather than by a fixed key. Sessions with no title at all fall back to the
+first 8 characters of their id. Names are resolved on the machine that owns the
+session, so a remote needs a current copy of this script to show them.
 
 ### Number format
 

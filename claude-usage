@@ -34,6 +34,13 @@ WINDOW_HOURS = 24
 GRAPH_ROWS = 8
 SESSION_ROWS = 12          # danach fasst eine Zeile den Rest zusammen
 
+# Satzarten, die einen Sessiontitel tragen. Welche davon geschrieben werden und
+# wie ihr Textfeld heißt, unterscheidet sich je nach Claude-Code-Version —
+# deshalb wird der Wert generisch gelesen statt über feste Feldnamen.
+TITLE_TYPES = {"custom-title": 2, "ai-title": 1, "agent-name": 0}
+TITLE_SKIP = {"type", "sessionId", "uuid", "leafUuid", "parentUuid",
+              "logicalParentUuid", "timestamp", "cwd", "version", "gitBranch"}
+
 # Grundbreite; alles darüber hinaus geht an die Balken bzw. Session-Namen.
 BASE_INNER = 84
 MIN_WIDTH = 86
@@ -246,6 +253,25 @@ def when(moment: dt.datetime) -> str:
     return f"{moment:%d.%m. %H:%M}"
 
 
+def title_of(entry: dict) -> str:
+    """Den Titel aus einem titelartigen Satz ziehen.
+
+    Bekannte Feldnamen zuerst, sonst der erste Textwert, der ersichtlich kein
+    Bezeichner ist. So überlebt die Erkennung eine umbenannte Spalte in einer
+    anderen Version, ohne dass hier jede Variante gepflegt werden muss.
+    """
+    for key in ("customTitle", "aiTitle", "agentName", "title", "name"):
+        value = entry.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    for key, value in entry.items():
+        if key in TITLE_SKIP or not isinstance(value, str):
+            continue
+        if value.strip() and not value.startswith(("/", "~")):
+            return value.strip()
+    return ""
+
+
 def clip(text: str, width: int) -> str:
     return text if len(text) <= width else text[:width] + "..."
 
@@ -275,7 +301,7 @@ def scan(projects: Path) -> dict:
     messages: dict[str, tuple] = {}   # message id -> (session, ts, total)
     starts: dict[str, dt.datetime] = {}
     cwds: dict[str, str] = {}
-    titles: dict[str, str] = {}
+    titles: dict[str, tuple] = {}   # session -> (Rang, Titel)
 
     if not projects.is_dir():
         empty = [("", "", 0, None)] * GRAPH_ROWS
@@ -299,12 +325,13 @@ def scan(projects: Path) -> dict:
 
                 # Claude Code schreibt den Session-Titel als eigene Zeile und
                 # aktualisiert ihn im Verlauf; das letzte Vorkommen gilt.
-                # "ai-title" ist der Regelfall; "agent-name" trägt denselben
-                # Text und dient als Rückfall für Sessions ohne den ersten.
-                if session and entry.get("type") in ("ai-title", "agent-name"):
-                    title = (entry.get("aiTitle") or entry.get("agentName") or "").strip()
-                    if title:
-                        titles[session] = title
+                rank = TITLE_TYPES.get(entry.get("type"))
+                if session and rank is not None:
+                    title = title_of(entry)
+                    # Ein selbst gesetzter Titel schlägt den generierten; bei
+                    # gleichem Rang gewinnt der jüngste Eintrag.
+                    if title and rank >= titles.get(session, (-1, ""))[0]:
+                        titles[session] = (rank, title)
 
                 if session:
                     if stamp and (session not in starts or stamp < starts[session]):
@@ -378,7 +405,7 @@ def scan(projects: Path) -> dict:
             continue
         sessions.append({
             "id": session,
-            "name": titles.get(session) or session[:8],
+            "name": (titles.get(session) or (0, ""))[1] or session[:8],
             "cwd": label_for(cwds.get(session, "")),
             "start": starts.get(session),
             **row,
