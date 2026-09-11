@@ -476,10 +476,10 @@ def probe_targets(targets: list, command: str, connect: int = 5) -> tuple:
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             )))
         except OSError as exc:
-            return None, None, exc.__class__.__name__
+            return None, None, f"ssh nicht startbar: {exc.__class__.__name__}"
 
     deadline = time.monotonic() + REMOTE_TIMEOUT
-    reason = "keine Antwort"
+    failures = {}
     winner = None
     while running and winner is None and time.monotonic() < deadline:
         for entry in list(running):
@@ -491,15 +491,23 @@ def probe_targets(targets: list, command: str, connect: int = 5) -> tuple:
             if proc.returncode == 0:
                 winner = (target, out)
                 break
-            reason = ssh_error(err)
+            # 255 ist ssh selbst, alles andere der Exit-Code der Gegenseite.
+            failures[target] = ("nicht erreichbar: " if proc.returncode == 255
+                                else "Aufruf fehlgeschlagen: ") + ssh_error(err)
         if winner is None and running:
             time.sleep(0.05)
 
     for _, proc in running:
         proc.kill()
-    if winner is None:
-        return None, None, reason
-    return winner[0], winner[1], None
+    if winner is not None:
+        return winner[0], winner[1], None
+
+    # Der Grund des bevorzugten Ziels ist der aussagekräftige. Ein spät
+    # eintreffender Timeout eines Ausweichziels würde ihn sonst überschreiben.
+    for target in targets:
+        if target in failures:
+            return None, None, failures[target]
+    return None, None, "nicht erreichbar: keine Antwort"
 
 
 def fetch_remote(remote: dict) -> dict:
@@ -525,6 +533,7 @@ def fetch_remote(remote: dict) -> dict:
             payload = json.loads(output)
         except ValueError:
             reason = "Antwort ist kein JSON — läuft dort claude-usage --export?"
+
         else:
             cache.parent.mkdir(parents=True, exist_ok=True)
             cache.write_text(json.dumps(payload))
@@ -597,7 +606,7 @@ def remote_note(result: dict) -> str:
     """Meldung zu einem Remote, oder leer wenn alles in Ordnung ist."""
     label = result["label"]
     if result.get("error"):
-        return f"{label}: nicht erreichbar ({result['error']}) — keine Zahlen von dort"
+        return f"{label}: {result['error']} — keine Zahlen von dort"
 
     payload = result.get("payload") or {}
     parts = []
@@ -606,8 +615,8 @@ def remote_note(result: dict) -> str:
         age = ""
         if stamp:
             minutes = int((dt.datetime.now().astimezone() - stamp).total_seconds() // 60)
-            age = f", Stand {stamp:%d.%m. %H:%M} (vor {minutes // 60} h {minutes % 60} min)"
-        parts.append(f"nicht erreichbar ({result['stale']}){age}")
+            age = f" — Stand {stamp:%d.%m. %H:%M}, vor {minutes // 60} h {minutes % 60} min"
+        parts.append(f"{result['stale']}{age}")
 
     offset = payload.get("tzOffsetMinutes")
     here = int(dt.datetime.now().astimezone().utcoffset().total_seconds() // 60)

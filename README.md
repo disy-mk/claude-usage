@@ -229,8 +229,15 @@ Authorize a key for it. A dedicated key locked to the export command is worth
 the extra minute — it cannot open a shell or forward anything:
 
 ```
-command="claude-usage --export",no-agent-forwarding,no-port-forwarding,no-pty,no-X11-forwarding ssh-ed25519 AAAA... claude-usage
+command="/Users/you/.local/bin/claude-usage --export",no-agent-forwarding,no-port-forwarding,no-pty,no-X11-forwarding ssh-ed25519 AAAA... claude-usage
 ```
+
+**Use an absolute path there.** A forced command runs in a non-interactive,
+non-login shell, which never sources the profile that puts `~/.local/bin` — or
+even `/usr/local/bin` on macOS — onto `PATH`. With a bare `claude-usage` the
+fetch fails with `command not found` while SSH itself works fine. The tool says
+exactly that, distinguishing `nicht erreichbar` (the connection) from
+`Aufruf fehlgeschlagen` (the remote command).
 
 On the **local** machine, describe the remote in
 `~/.config/claude-usage/config.json`:
@@ -251,6 +258,12 @@ On the **local** machine, describe the remote in
 | `ssh` | Anything your SSH client understands — `user@host`, an IP, or a `Host` alias from `~/.ssh/config`, which is the tidier place for the key and port. May be a **list**; the addresses are probed simultaneously and the first answer wins, so a sleeping machine costs one timeout rather than one per address. |
 | `command` | Override if the binary lives somewhere unusual. Default `claude-usage --export`. |
 | `connectTimeout` | Seconds before an address is given up on. Default 5. Over a VPN, 3 is plenty and keeps the view snappy when the remote is off. |
+
+**A Bonjour name beats a fixed address.** On the same link, `hostname.local`
+resolves to the machine itself rather than to an address that might belong to
+something else elsewhere — macOS publishes one by default. It only works when
+both machines share a network segment, so pair it with a VPN address in the
+list for the case where they do not.
 
 **Prefer a VPN address over a LAN one.** Private ranges repeat: a `192.168.x.y`
 that is your laptop at home may be someone else's machine at the office, and
