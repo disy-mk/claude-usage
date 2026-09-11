@@ -453,37 +453,88 @@ def export_payload(stats: dict) -> dict:
     }
 
 
-def fetch_remote(remote: dict) -> dict:
-    """Einen Rechner per SSH abfragen, mit Rückfall auf den letzten Stand.
+def ssh_error(text: str) -> str:
+    """Die aussagekräftige Hälfte einer ssh-Fehlermeldung."""
+    line = (text or "").strip().splitlines()
+    line = line[-1] if line else "ssh fehlgeschlagen"
+    return re.sub(r"^ssh: connect to host \S+ port \d+: ", "", line)[:60]
 
-    Ist er nicht erreichbar, gilt der zwischengespeicherte Export weiter — mit
+
+def probe_targets(targets: list, command: str, connect: int = 5) -> tuple:
+    """Alle Adressen gleichzeitig anfragen, die erste Antwort gewinnt.
+
+    Nacheinander zu probieren summiert die Timeouts — bei einem schlafenden
+    Rechner mit zwei Adressen wären das zweimal fünf Sekunden Wartezeit im
+    Vordergrund. Verlierer werden abgeräumt, sobald einer geantwortet hat.
+    """
+    running = []
+    for target in targets:
+        try:
+            running.append((target, subprocess.Popen(
+                ["ssh", "-o", "BatchMode=yes", "-o", f"ConnectTimeout={connect}",
+                 str(target), command],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )))
+        except OSError as exc:
+            return None, None, exc.__class__.__name__
+
+    deadline = time.monotonic() + REMOTE_TIMEOUT
+    reason = "keine Antwort"
+    winner = None
+    while running and winner is None and time.monotonic() < deadline:
+        for entry in list(running):
+            target, proc = entry
+            if proc.poll() is None:
+                continue
+            running.remove(entry)
+            out, err = proc.communicate()
+            if proc.returncode == 0:
+                winner = (target, out)
+                break
+            reason = ssh_error(err)
+        if winner is None and running:
+            time.sleep(0.05)
+
+    for _, proc in running:
+        proc.kill()
+    if winner is None:
+        return None, None, reason
+    return winner[0], winner[1], None
+
+
+def fetch_remote(remote: dict) -> dict:
+    """Einen Rechner abfragen, mit Rückfall auf den letzten Stand.
+
+    `ssh` darf eine Liste sein — etwa LAN- und VPN-Adresse desselben Rechners.
+    Ist keiner erreichbar, gilt der zwischengespeicherte Export weiter, mit
     Altersangabe, damit alte Zahlen nicht als aktuell durchgehen.
     """
-    label = str(remote.get("label") or remote.get("ssh") or "remote")
+    label = str(remote.get("label") or "remote")
     cache = Path(CACHE_DIR).expanduser() / f"{re.sub(r'[^A-Za-z0-9_.-]', '_', label)}.json"
     command = remote.get("command") or "claude-usage --export"
-    target = remote.get("ssh")
-    if not target:
+
+    targets = remote.get("ssh")
+    targets = [targets] if isinstance(targets, str) else [t for t in (targets or []) if t]
+    if not targets:
         return {"label": label, "error": "kein ssh-Ziel konfiguriert"}
 
-    try:
-        done = subprocess.run(
-            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", target, command],
-            capture_output=True, text=True, timeout=REMOTE_TIMEOUT,
-        )
-        if done.returncode != 0:
-            raise RuntimeError((done.stderr or "").strip().splitlines()[-1:] or ["ssh fehlgeschlagen"])
-        payload = json.loads(done.stdout)
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        cache.write_text(json.dumps(payload))
-        return {"label": label, "payload": payload}
-    except Exception as exc:
-        reason = exc.args[0][0] if isinstance(exc, RuntimeError) and exc.args else exc.__class__.__name__
+    connect = int(remote.get("connectTimeout") or 5)
+    target, output, reason = probe_targets(targets, command, connect)
+    if reason is None:
         try:
-            payload = json.loads(cache.read_text())
-        except Exception:
-            return {"label": label, "error": str(reason)}
-        return {"label": label, "payload": payload, "stale": str(reason)}
+            payload = json.loads(output)
+        except ValueError:
+            reason = "Antwort ist kein JSON — läuft dort claude-usage --export?"
+        else:
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            cache.write_text(json.dumps(payload))
+            return {"label": label, "payload": payload, "via": target}
+
+    try:
+        payload = json.loads(cache.read_text())
+    except Exception:
+        return {"label": label, "error": reason}
+    return {"label": label, "payload": payload, "stale": reason}
 
 
 def gather_remotes() -> list:

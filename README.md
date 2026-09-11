@@ -239,16 +239,24 @@ On the **local** machine, describe the remote in
 {
   "device": "workstation",
   "remotes": [
-    { "label": "laptop", "ssh": "claude-mac" }
+    { "label": "laptop", "ssh": "laptop-vpn", "connectTimeout": 3 }
   ]
 }
 ```
 
-`ssh` is anything your SSH client understands — `user@host`, an IP, or a `Host`
-alias from `~/.ssh/config`, which is the tidier place for the key and port.
-`command` may be added per remote if the binary lives somewhere unusual
-(default: `claude-usage --export`). `device` names *this* machine in the column;
-it defaults to the hostname.
+| Key | Meaning |
+|---|---|
+| `device` | Name for *this* machine in the column. Defaults to the hostname. |
+| `label` | Name for the remote, used in the column and for its cache file. |
+| `ssh` | Anything your SSH client understands — `user@host`, an IP, or a `Host` alias from `~/.ssh/config`, which is the tidier place for the key and port. May be a **list**; the addresses are probed simultaneously and the first answer wins, so a sleeping machine costs one timeout rather than one per address. |
+| `command` | Override if the binary lives somewhere unusual. Default `claude-usage --export`. |
+| `connectTimeout` | Seconds before an address is given up on. Default 5. Over a VPN, 3 is plenty and keeps the view snappy when the remote is off. |
+
+**Prefer a VPN address over a LAN one.** Private ranges repeat: a `192.168.x.y`
+that is your laptop at home may be someone else's machine at the office, and
+the tool would try to talk to it. SSH's host-key check catches the swap, but
+addressing a machine by a route that is unique to you avoids the question
+entirely.
 
 ### What gets transferred
 
@@ -279,6 +287,9 @@ its own thread with a 5-second connect timeout and a 20-second ceiling.
   quietly adding up mismatched buckets.
 - **`gesamt` stays per-session**, so a session that ran on one machine shows its
   lifetime from that machine only.
+- **First connection needs a host key.** Fetching runs with `BatchMode=yes`, so
+  an unknown host fails instead of prompting. Connect once by hand
+  (`ssh laptop-vpn`) to check the fingerprint and record it.
 - **Sessions are not deduplicated across machines.** They have distinct ids, so
   this only matters if you sync `~/.claude` itself between machines — then the
   same session would be counted twice. Don't do both.
