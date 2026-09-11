@@ -98,9 +98,12 @@ consumption in that window. A `0` under `heute` means the session ran
 yesterday but still falls inside the rolling window. The `heute` and `24 h`
 columns add up exactly to the `Alle Sessions` row.
 
-**Session names** come from the `ai-title` records Claude Code writes into the
-transcripts — the title it gives a session and refines as it goes; the last one
-wins. Sessions without a title fall back to the first 8 characters of their id.
+**Session names** come from the `ai-title` (or `agent-name`) records Claude Code
+writes into the transcripts — the title it gives a session and refines as it
+goes; the last one wins. Sessions without one fall back to the first 8
+characters of their id. Names are resolved on the machine that owns the
+session, so a remote showing bare ids is usually running an older Claude Code
+or an older copy of this script.
 
 ### Number format
 
@@ -109,6 +112,7 @@ wins. Sessions without a title fall back to the first 8 characters of their id.
 | < 1,000 | as-is | `999` |
 | from 1,000 | `k`, one decimal | `1.5k`, `124.7k` |
 | from 1,000k | `M`, up to three decimals | `1.231M`, `216.442M` |
+| from 1,000M | `G`, up to three decimals | `1.981G` |
 
 Trailing zeros are trimmed for `M`: `1.000M` prints as `1M`, `8.640M` as
 `8.64M`. The switch to `M` happens at 999,950 so that `1000.0k` never appears.
@@ -258,6 +262,7 @@ On the **local** machine, describe the remote in
 | `ssh` | Anything your SSH client understands — `user@host`, an IP, or a `Host` alias from `~/.ssh/config`, which is the tidier place for the key and port. May be a **list**; the addresses are probed simultaneously and the first answer wins, so a sleeping machine costs one timeout rather than one per address. |
 | `command` | Override if the binary lives somewhere unusual. Default `claude-usage --export`. |
 | `connectTimeout` | Seconds before an address is given up on. Default 5. Over a VPN, 3 is plenty and keeps the view snappy when the remote is off. |
+| `maxSessions` | How many session rows to print before the rest is folded into one `… N weitere` line. Default 12. The totals always cover every session. |
 
 **A Bonjour name beats a fixed address.** On the same link, `hostname.local`
 resolves to the machine itself rather than to an address that might belong to
@@ -298,6 +303,10 @@ its own thread with a 5-second connect timeout and a 20-second ceiling.
   machine's own clock. If the offsets differ, the grids cannot be aligned; the
   tool detects this and says `andere Zeitzone … Raster passt nicht` instead of
   quietly adding up mismatched buckets.
+- **Fetching costs as long as the remote scan takes.** The export is computed on
+  demand, so a machine with a large transcript store adds a few seconds to every
+  refresh. The live view's default 60-second interval absorbs that; a one-shot
+  call feels it.
 - **`gesamt` stays per-session**, so a session that ran on one machine shows its
   lifetime from that machine only.
 - **First connection needs a host key.** Fetching runs with `BatchMode=yes`, so

@@ -32,6 +32,7 @@ REMOTE_TIMEOUT = 20        # Sekunden je Remote
 REMOTE_STALE_HOURS = 12    # danach gilt ein zwischengespeicherter Stand als alt
 WINDOW_HOURS = 24
 GRAPH_ROWS = 8
+SESSION_ROWS = 12          # danach fasst eine Zeile den Rest zusammen
 
 # Grundbreite; alles darüber hinaus geht an die Balken bzw. Session-Namen.
 BASE_INNER = 84
@@ -151,6 +152,8 @@ def build_layout(with_device: bool = False) -> SimpleNamespace:
 
 def tokens(n: int) -> str:
     """1234 -> '1.2k', 1231000 -> '1.231M'. Bei M werden Nullen getrimmt."""
+    if n >= 999_950_000:   # sonst stuende hier "1981.494M"
+        return f"{n / 1_000_000_000:.3f}".rstrip("0").rstrip(".") + "G"
     if n >= 999_950:  # ab hier rundete die k-Darstellung auf 1000.0k auf
         return f"{n / 1_000_000:.3f}".rstrip("0").rstrip(".") + "M"
     if n >= 1000:
@@ -296,8 +299,10 @@ def scan(projects: Path) -> dict:
 
                 # Claude Code schreibt den Session-Titel als eigene Zeile und
                 # aktualisiert ihn im Verlauf; das letzte Vorkommen gilt.
-                if entry.get("type") == "ai-title" and session:
-                    title = (entry.get("aiTitle") or "").strip()
+                # "ai-title" ist der Regelfall; "agent-name" trägt denselben
+                # Text und dient als Rückfall für Sessions ohne den ersten.
+                if session and entry.get("type") in ("ai-title", "agent-name"):
+                    title = (entry.get("aiTitle") or entry.get("agentName") or "").strip()
                     if title:
                         titles[session] = title
 
@@ -701,7 +706,9 @@ def render() -> str:
     # Eine Zeile je Session mit Aktivität im Fenster
     if stats["sessions"]:
         out.append(separator(lay.tokens, lay.tokens, lay.inner))
-        for session in stats["sessions"]:
+        limit = int(config().get("maxSessions") or SESSION_ROWS)
+        shown, rest = stats["sessions"][:limit], stats["sessions"][limit:]
+        for session in shown:
             out.append(token_row(
                 [(clip(session["name"], name_chars), False)]
                 + device_part(session.get("device", ""))
@@ -709,6 +716,16 @@ def render() -> str:
                    (tokens(session["lifetime"]), True),
                    (when(session["start"]) if session["start"] else "—", False)]
                 + project_part(session["cwd"])))
+
+        if rest:
+            # Die Summen oben decken alle Sessions ab; hier geht es nur darum,
+            # die Liste nicht ins Endlose wachsen zu lassen.
+            out.append(token_row(
+                [(f"… {len(rest)} weitere", False)] + device_part("")
+                + [(tokens(sum(s["today"] for s in rest)), True),
+                   (tokens(sum(s["window"] for s in rest)), True),
+                   ("", True), ("", False)]
+                + project_part("")))
 
     # Nur melden, wenn mit einem Remote etwas nicht stimmt
     notes = [note for note in (remote_note(result) for result in results) if note]
