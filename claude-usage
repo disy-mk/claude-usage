@@ -567,8 +567,11 @@ def fetch_remote(remote: dict) -> dict:
             reason = "Antwort ist kein JSON — läuft dort claude-usage --export?"
 
         else:
-            cache.parent.mkdir(parents=True, exist_ok=True)
+            # Der Cache enthält Sessiontitel und Arbeitsverzeichnisse der
+            # anderen Maschine — nichts für andere Konten auf diesem Rechner.
+            cache.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             cache.write_text(json.dumps(payload))
+            cache.chmod(0o600)
             return {"label": label, "payload": payload, "via": target}
 
     try:
