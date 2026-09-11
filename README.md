@@ -114,10 +114,14 @@ session, so a remote needs a current copy of this script to show them.
 | < 1,000 | as-is | `999` |
 | from 1,000 | `k`, one decimal | `1.5k`, `124.7k` |
 | from 1,000k | `M`, up to three decimals | `1.231M`, `216.442M` |
-| from 1,000M | `G`, up to three decimals | `1.981G` |
+| from 1,000M | `B`, up to three decimals | `1.981B` |
 
-Trailing zeros are trimmed for `M`: `1.000M` prints as `1M`, `8.640M` as
-`8.64M`. The switch to `M` happens at 999,950 so that `1000.0k` never appears.
+`k`, `M` and `B` are counting words here — thousand, million, billion — not SI
+prefixes, which is why a billion tokens reads `1.981B` rather than `1.981G`.
+
+Trailing zeros are trimmed from `M` and `B`: `1.000M` prints as `1M`, `8.640M`
+as `8.64M`. Each switch happens at 999,950 of the smaller unit, so neither
+`1000.0k` nor `1000.0M` ever appears.
 
 ### Times
 

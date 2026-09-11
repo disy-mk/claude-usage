@@ -158,9 +158,14 @@ def build_layout(with_device: bool = False) -> SimpleNamespace:
 # ------------------------------------------------------------------ Formatierung
 
 def tokens(n: int) -> str:
-    """1234 -> '1.2k', 1231000 -> '1.231M'. Bei M werden Nullen getrimmt."""
+    """1234 -> '1.2k', 1231000 -> '1.231M', 1981494000 -> '1.981B'.
+
+    k/M/B sind hier Zählwörter — Tausend, Million, Billion im englischen Sinn —
+    und keine SI-Präfixe. Deshalb B und nicht G: gezählt werden Token, nicht
+    Bytes. Ab M werden nachlaufende Nullen getrimmt.
+    """
     if n >= 999_950_000:   # sonst stuende hier "1981.494M"
-        return f"{n / 1_000_000_000:.3f}".rstrip("0").rstrip(".") + "G"
+        return f"{n / 1_000_000_000:.3f}".rstrip("0").rstrip(".") + "B"
     if n >= 999_950:  # ab hier rundete die k-Darstellung auf 1000.0k auf
         return f"{n / 1_000_000:.3f}".rstrip("0").rstrip(".") + "M"
     if n >= 1000:
