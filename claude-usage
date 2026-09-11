@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 """Live-Ansicht des Claude-Code-Verbrauchs im Terminal.
 
 Limits kommen von `omarchy-agent-usage-claude` (Anthropics OAuth-Endpoint),
@@ -7,6 +7,7 @@ die Token-Zahlen aus einem eigenen Scan der Transcripts unter
 
 Aufruf:  claude-usage            einmalig
          claude-usage -w [SEK]   live, Default 60 s
+         claude-usage --export   Zahlen als JSON (fuer andere Rechner)
 """
 
 from __future__ import annotations
@@ -19,10 +20,16 @@ import shutil
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 
 COLLECTOR = "omarchy-agent-usage-claude"   # liefert Tarif und Limits
+EXPORT_SCHEMA = 1
+CONFIG_PATH = "~/.config/claude-usage/config.json"
+CACHE_DIR = "~/.cache/claude-usage"
+REMOTE_TIMEOUT = 20        # Sekunden je Remote
+REMOTE_STALE_HOURS = 12    # danach gilt ein zwischengespeicherter Stand als alt
 WINDOW_HOURS = 24
 GRAPH_ROWS = 8
 
@@ -34,6 +41,7 @@ GRAPH_LABELS = (5, 6, 5)   # "12-15", "10.09.", "KW 37"
 VALUE_CHARS = 8            # rechte Zahlenspalte der Graphen
 PROJECT_MIN = 12           # ab dieser Breite lohnt die Projektspalte
 PROJECT_MAX = 28
+DEVICE_CHARS = 12          # Spaltenbreite für den Gerätenamen
 
 USAGE_KEYS = (
     ("input_tokens", "inputTokens"),
@@ -105,30 +113,36 @@ def visible_len(text: str) -> int:
 
 # ------------------------------------------------------------------ Layout
 
-def build_layout() -> SimpleNamespace:
+def build_layout(with_device: bool = False) -> SimpleNamespace:
     """Spaltenbreiten für die aktuelle Terminalbreite.
 
     Die drei Blöcke müssen dieselbe Innenbreite ergeben, sonst passen die
     Trennlinien nicht aufeinander:
-        sum(limits) + 3 == sum(tokens) + 4 == sum(graph) + 2 == inner
+        sum(limits) + 3 == sum(tokens) + len(tokens) - 1 == sum(graph) + 2 == inner
+    Zusatzspalten kosten je ein Zeichen für ihren eigenen Trenner.
     """
     columns = shutil.get_terminal_size((MIN_WIDTH, 24)).columns
     inner = max(MIN_WIDTH, min(columns, MAX_WIDTH)) - 2
     extra = inner - BASE_INNER
 
-    # Ab genug Zusatzbreite bekommt die Token-Tabelle wieder eine Spalte für das
-    # Arbeitsverzeichnis; das eine Zeichen geht an ihren zusätzlichen Trenner.
-    if extra >= PROJECT_MIN + 1:
-        project = min(PROJECT_MAX, max(PROJECT_MIN, (extra - 1) // 3))
-        tokens = (30 + extra - 1 - project, 11, 11, 11, 17, project)
-    else:
-        tokens = (30 + extra, 11, 11, 11, 17)
+    cols = [30, 11, 11, 11, 17]          # Name, heute, 24 h, gesamt, seit
+    slack = extra
+    if with_device:
+        cols.insert(1, DEVICE_CHARS)
+        slack -= DEVICE_CHARS + 1
+    if slack >= PROJECT_MIN + 1:
+        project = min(PROJECT_MAX, max(PROJECT_MIN, (slack - 1) // 3))
+        cols.append(project)
+        slack -= project + 1
+    cols[0] += slack                     # der Rest geht an die Namensspalte
 
     share = [extra // 3 + (1 if i < extra % 3 else 0) for i in range(3)]
     return SimpleNamespace(
         inner=inner,
+        with_device=with_device,
+        with_project=len(cols) > (6 if with_device else 5),
         limits=(22, 7, 32 + extra, 20),          # Fenster, Prozent, Balken, Reset
-        tokens=tokens,                           # Name, heute, 24 h, gesamt, seit [, Projekt]
+        tokens=tuple(cols),
         graph=(27 + share[0], 28 + share[1], 27 + share[2]),
     )
 
@@ -154,8 +168,11 @@ def cell(text: str, width: int, right: bool = False) -> str:
     """Zelleninhalt mit je einem Leerzeichen Rand, exakt `width` sichtbare Zeichen."""
     room = width - 2
     pad = room - visible_len(text)
-    if pad < 0:                       # nur ungefärbter Text wird je zu lang
-        return " " + text[:room] + " "
+    if pad < 0:
+        # Zu lang wird nur ungefärbter Text; gefärbte Zellen (Balken, bereits
+        # ausgerichtete Beschriftungen) haben ihre Breite schon fest. Das "…"
+        # macht sichtbar, dass hier etwas fehlt.
+        return " " + (text[:room] if ANSI.search(text) else text[:room - 1] + "…") + " "
     return " " + (" " * pad + text if right else text + " " * pad) + " "
 
 
@@ -258,7 +275,7 @@ def scan(projects: Path) -> dict:
     titles: dict[str, str] = {}
 
     if not projects.is_dir():
-        empty = [("", 0, None)] * GRAPH_ROWS
+        empty = [("", "", 0, None)] * GRAPH_ROWS
         return {"total_today": 0, "total_window": 0, "sessions": [],
                 "prompts_today": 0, "graph": (empty, empty, empty)}
 
@@ -368,15 +385,143 @@ def scan(projects: Path) -> dict:
         "total_window": total_window,
         "prompts_today": prompts_today,
         "sessions": sessions,
+        # Jeder Eintrag: (Schluessel, Beschriftung, Wert, Farbe). Der Schluessel
+        # ist absolut, damit sich das Raster eines anderen Rechners zuordnen
+        # laesst; die Beschriftung ist reine Darstellung.
         "graph": (
-            [(f"{h:%H}-{h + dt.timedelta(hours=3):%H}", by_hour[h], None) for h in hours],
-            [(f"{d:%d.%m.}", by_day[d], WEEKEND.get(d.weekday())) for d in days],
-            [(f"KW {w.isocalendar()[1]:02d}", by_week[w], None) for w in weeks],
+            [(h.isoformat(), f"{h:%H}-{h + dt.timedelta(hours=3):%H}", by_hour[h], None) for h in hours],
+            [(d.isoformat(), f"{d:%d.%m.}", by_day[d], WEEKEND.get(d.weekday())) for d in days],
+            [(w.isoformat(), f"KW {w.isocalendar()[1]:02d}", by_week[w], None) for w in weeks],
         ),
     }
 
 
 # ------------------------------------------------------------------ Collector
+
+def config() -> dict:
+    path = Path(CONFIG_PATH).expanduser()
+    try:
+        return json.loads(path.read_text())
+    except FileNotFoundError:
+        return {}
+    except ValueError as exc:
+        print(f"{path}: {exc}", file=sys.stderr)
+        return {}
+
+
+def device_name() -> str:
+    """Kurzer Name dieses Rechners für die Geräte-Spalte."""
+    return (os.environ.get("CLAUDE_USAGE_DEVICE")
+            or config().get("device")
+            or os.uname().nodename.split(".")[0])
+
+
+def export_payload(stats: dict) -> dict:
+    """Was ein anderer Rechner von hier braucht — ausschließlich Zahlen.
+
+    Keine Prompts, keine Antworten, keine Dateinamen aus den Transcripts: nur
+    Session-Titel, Arbeitsverzeichnis und Zählerstände.
+    """
+    now = dt.datetime.now().astimezone()
+    return {
+        "schema": EXPORT_SCHEMA,
+        "device": device_name(),
+        "generatedAt": now.isoformat(),
+        "tzOffsetMinutes": int(now.utcoffset().total_seconds() // 60),
+        "windowHours": WINDOW_HOURS,
+        "totals": {
+            "today": stats["total_today"],
+            "window": stats["total_window"],
+            "promptsToday": stats["prompts_today"],
+        },
+        "sessions": [
+            {
+                "id": session["id"],
+                "name": session["name"],
+                "cwd": session["cwd"],
+                "start": session["start"].isoformat() if session["start"] else None,
+                "today": session["today"],
+                "window": session["window"],
+                "lifetime": session["lifetime"],
+            }
+            for session in stats["sessions"]
+        ],
+        "graph": {
+            name: [[key, value] for key, _, value, _ in column]
+            for name, column in zip(("hours", "days", "weeks"), stats["graph"])
+        },
+    }
+
+
+def fetch_remote(remote: dict) -> dict:
+    """Einen Rechner per SSH abfragen, mit Rückfall auf den letzten Stand.
+
+    Ist er nicht erreichbar, gilt der zwischengespeicherte Export weiter — mit
+    Altersangabe, damit alte Zahlen nicht als aktuell durchgehen.
+    """
+    label = str(remote.get("label") or remote.get("ssh") or "remote")
+    cache = Path(CACHE_DIR).expanduser() / f"{re.sub(r'[^A-Za-z0-9_.-]', '_', label)}.json"
+    command = remote.get("command") or "claude-usage --export"
+    target = remote.get("ssh")
+    if not target:
+        return {"label": label, "error": "kein ssh-Ziel konfiguriert"}
+
+    try:
+        done = subprocess.run(
+            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", target, command],
+            capture_output=True, text=True, timeout=REMOTE_TIMEOUT,
+        )
+        if done.returncode != 0:
+            raise RuntimeError((done.stderr or "").strip().splitlines()[-1:] or ["ssh fehlgeschlagen"])
+        payload = json.loads(done.stdout)
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_text(json.dumps(payload))
+        return {"label": label, "payload": payload}
+    except Exception as exc:
+        reason = exc.args[0][0] if isinstance(exc, RuntimeError) and exc.args else exc.__class__.__name__
+        try:
+            payload = json.loads(cache.read_text())
+        except Exception:
+            return {"label": label, "error": str(reason)}
+        return {"label": label, "payload": payload, "stale": str(reason)}
+
+
+def gather_remotes() -> list:
+    remotes = config().get("remotes") or []
+    if not remotes:
+        return []
+    with ThreadPoolExecutor(max_workers=max(1, len(remotes))) as pool:
+        return list(pool.map(fetch_remote, remotes))
+
+
+def merge_remote(stats: dict, payload: dict) -> None:
+    """Einen fremden Export in die lokalen Zahlen einrechnen."""
+    totals = payload.get("totals") or {}
+    stats["total_today"] += int(totals.get("today") or 0)
+    stats["total_window"] += int(totals.get("window") or 0)
+    stats["prompts_today"] += int(totals.get("promptsToday") or 0)
+
+    device = str(payload.get("device") or "?")
+    for session in payload.get("sessions") or []:
+        stats["sessions"].append({
+            "id": str(session.get("id") or ""),
+            "name": str(session.get("name") or ""),
+            "cwd": str(session.get("cwd") or ""),
+            "device": device,
+            "start": parse_ts(session.get("start")),
+            "today": int(session.get("today") or 0),
+            "window": int(session.get("window") or 0),
+            "lifetime": int(session.get("lifetime") or 0),
+        })
+
+    graph = payload.get("graph") or {}
+    merged = []
+    for name, column in zip(("hours", "days", "weeks"), stats["graph"]):
+        remote = {str(key): int(value or 0) for key, value in (graph.get(name) or [])}
+        merged.append([(key, label, value + remote.get(key, 0), color)
+                       for key, label, value, color in column])
+    stats["graph"] = tuple(merged)
+
 
 def limits() -> dict:
     """Limits vom Omarchy-Collector.
@@ -397,12 +542,58 @@ def limits() -> dict:
 
 # ------------------------------------------------------------------ Ausgabe
 
+def remote_note(result: dict) -> str:
+    """Meldung zu einem Remote, oder leer wenn alles in Ordnung ist."""
+    label = result["label"]
+    if result.get("error"):
+        return f"{label}: nicht erreichbar ({result['error']}) — keine Zahlen von dort"
+
+    payload = result.get("payload") or {}
+    parts = []
+    if result.get("stale"):
+        stamp = parse_ts(payload.get("generatedAt"))
+        age = ""
+        if stamp:
+            minutes = int((dt.datetime.now().astimezone() - stamp).total_seconds() // 60)
+            age = f", Stand {stamp:%d.%m. %H:%M} (vor {minutes // 60} h {minutes % 60} min)"
+        parts.append(f"nicht erreichbar ({result['stale']}){age}")
+
+    offset = payload.get("tzOffsetMinutes")
+    here = int(dt.datetime.now().astimezone().utcoffset().total_seconds() // 60)
+    if offset is not None and int(offset) != here:
+        # Tages- und Blockgrenzen entstehen aus der lokalen Uhr des jeweiligen
+        # Rechners; bei anderer Zeitzone passen die Raster nicht zusammen.
+        parts.append(f"andere Zeitzone (UTC{int(offset) // 60:+d}), Raster passt nicht")
+
+    return f"{label}: " + "; ".join(parts) if parts else ""
+
+
 def render() -> str:
-    lay = build_layout()
+    results = gather_remotes()
+    lay = build_layout(with_device=bool(results))
     record = limits()
     projects = Path(os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude").expanduser() / "projects"
     stats = scan(projects)
     name_chars = lay.tokens[0] - 5      # Zellinhalt minus die drei Punkte
+
+    here = device_name()
+    for session in stats["sessions"]:
+        session["device"] = here
+    for result in results:
+        if result.get("payload"):
+            merge_remote(stats, result["payload"])
+    stats["sessions"].sort(key=lambda session: session["window"], reverse=True)
+
+    def token_row(values: list) -> str:
+        """values in Spaltenreihenfolge, jeweils (Text, rechtsbündig)."""
+        return row([cell(text, width, right)
+                    for (text, right), width in zip(values, lay.tokens)])
+
+    def device_part(text):
+        return [(text, False)] if lay.with_device else []
+
+    def project_part(text):
+        return [(text, False)] if lay.with_project else []
 
     tier = record.get("tierLabel")
     # Eigene Scan-Zeit, nicht record.updatedAt: die Token-Zahlen unten stammen
@@ -412,7 +603,6 @@ def render() -> str:
 
     out = [separator(None, (lay.inner,), lay.inner)]
 
-    # Kopf: Tarif links, Prompts und Scan-Zeitpunkt rechts.
     left = f"Claude Code — {tier}" if tier else "Claude Code"
     right = f"{stats['prompts_today']} Prompts heute · Stand {stamp:%H:%M:%S %Z}"
     gap = max(1, lay.inner - 2 - len(left) - len(right))
@@ -437,40 +627,41 @@ def render() -> str:
 
     # Tokens: Kopfzeile und Gesamtsumme
     out.append(separator(lay.limits if rows else (lay.inner,), lay.tokens, lay.inner))
-    project = len(lay.tokens) > 5
-    out.append(row([
-        cell("Tokens", lay.tokens[0]),
-        cell("heute", lay.tokens[1], right=True),
-        cell(f"{WINDOW_HOURS} h", lay.tokens[2], right=True),
-        cell("gesamt", lay.tokens[3], right=True),
-        cell("seit", lay.tokens[4]),
-    ] + ([cell("Projekt", lay.tokens[5])] if project else [])))
+    out.append(token_row(
+        [("Tokens", False)] + device_part("Gerät")
+        + [("heute", True), (f"{WINDOW_HOURS} h", True), ("gesamt", True), ("seit", False)]
+        + project_part("Projekt")))
     out.append(separator(lay.tokens, lay.tokens, lay.inner))
-    out.append(row([
-        cell("Alle Sessions", lay.tokens[0]),
-        cell(tokens(stats["total_today"]), lay.tokens[1], right=True),
-        cell(tokens(stats["total_window"]), lay.tokens[2], right=True),
-        cell("", lay.tokens[3], right=True),
-        cell("", lay.tokens[4]),
-    ] + ([cell("", lay.tokens[5])] if project else [])))
+    out.append(token_row(
+        [("Alle Sessions", False)] + device_part("")
+        + [(tokens(stats["total_today"]), True), (tokens(stats["total_window"]), True),
+           ("", True), ("", False)]
+        + project_part("")))
 
     # Eine Zeile je Session mit Aktivität im Fenster
     if stats["sessions"]:
         out.append(separator(lay.tokens, lay.tokens, lay.inner))
         for session in stats["sessions"]:
-            out.append(row([
-                cell(clip(session["name"], name_chars), lay.tokens[0]),
-                cell(tokens(session["today"]), lay.tokens[1], right=True),
-                cell(tokens(session["window"]), lay.tokens[2], right=True),
-                cell(tokens(session["lifetime"]), lay.tokens[3], right=True),
-                cell(when(session["start"]) if session["start"] else "—", lay.tokens[4]),
-            ] + ([cell(session["cwd"], lay.tokens[5])] if project else [])))
+            out.append(token_row(
+                [(clip(session["name"], name_chars), False)]
+                + device_part(session.get("device", ""))
+                + [(tokens(session["today"]), True), (tokens(session["window"]), True),
+                   (tokens(session["lifetime"]), True),
+                   (when(session["start"]) if session["start"] else "—", False)]
+                + project_part(session["cwd"])))
+
+    # Nur melden, wenn mit einem Remote etwas nicht stimmt
+    notes = [note for note in (remote_note(result) for result in results) if note]
+    if notes:
+        out.append(separator(lay.tokens, (lay.inner,), lay.inner))
+        for note in notes:
+            out.append(full_row(note, lay.inner))
 
     # Drei Verlaufsspalten, je Spalte auf das eigene Maximum skaliert — die
     # Größenordnungen von 3 h, Tag und Woche liegen zu weit auseinander.
     series = stats["graph"]
-    peaks = [max((value for _, value, _ in column), default=0) for column in series]
-    out.append(separator(lay.tokens, lay.graph, lay.inner))
+    peaks = [max((value for _, _, value, _ in column), default=0) for column in series]
+    out.append(separator((lay.inner,) if notes else lay.tokens, lay.graph, lay.inner))
     out.append(row([
         cell(f"{WINDOW_HOURS} h · 3 h je Zeile", lay.graph[0]),
         cell(f"{GRAPH_ROWS} Tage", lay.graph[1]),
@@ -480,7 +671,7 @@ def render() -> str:
     for index in range(GRAPH_ROWS):
         cells = []
         for width, label_chars, column, peak in zip(lay.graph, GRAPH_LABELS, series, peaks):
-            label, value, color = column[index]
+            _, label, value, color = column[index]
             bar_chars = width - 2 - label_chars - 2 - VALUE_CHARS
             cells.append(cell(
                 f"{tint(f'{label:<{label_chars}}', color)} {dots(value, peak, bar_chars)} "
@@ -497,6 +688,11 @@ def main() -> int:
     argv = sys.argv[1:]
     if argv and argv[0] in ("-h", "--help"):
         print(__doc__.strip())
+        return 0
+    if argv and argv[0] == "--export":
+        projects = Path(os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude").expanduser() / "projects"
+        json.dump(export_payload(scan(projects)), sys.stdout)
+        sys.stdout.write("\n")
         return 0
     if argv and argv[0] in ("-w", "--watch"):
         # Der Collector drosselt den Limits-Endpoint auf 15 s; schneller zu

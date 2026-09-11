@@ -6,11 +6,11 @@ history graphs over hours, days and weeks.
 
 ```
 ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ Claude Code — Max 5x                                               214 Prompts heute · Stand 15:02:32 CEST │
+│ Claude Code — Max 5x                                               214 Prompts heute · Stand 21:20:39 CEST │
 ├──────────────────────┬───────┬────────────────────────────────────────────────────────┬────────────────────┤
-│ Session (5-hour)     │   42% │ ██████████████████████································ │ Reset 10.09. 17:12 │
-│ Weekly (7-day)       │   61% │ ████████████████████████████████······················ │ Reset 14.09. 15:02 │
-│ Opus Weekly          │   23% │ ████████████·········································· │ Reset 14.09. 15:02 │
+│ Session (5-hour)     │   42% │ ██████████████████████································ │ Reset 11.09. 23:30 │
+│ Weekly (7-day)       │   61% │ ████████████████████████████████······················ │ Reset 15.09. 21:20 │
+│ Opus Weekly          │   23% │ ████████████·········································· │ Reset 15.09. 21:20 │
 ├──────────────────────┴───────┴──────────┬───────────┬───────────┬───────────┬─────────┴───────┬────────────┤
 │ Tokens                                  │     heute │      24 h │    gesamt │ seit            │ Projekt    │
 ├─────────────────────────────────────────┼───────────┼───────────┼───────────┼─────────────────┼────────────┤
@@ -23,14 +23,14 @@ history graphs over hours, days and weeks.
 ├───────────────────────────────────┬─────┴───────────┴───────────┴──────┬────┴─────────────────┴────────────┤
 │ 24 h · 3 h je Zeile               │ 8 Tage                             │ 8 Wochen                          │
 ├───────────────────────────────────┼────────────────────────────────────┼───────────────────────────────────┤
-│ 18-21 ··················        0 │ 03.09. ⣿⣿⣿⣿⣿⣿············    18.3M │ KW 30 ··················        0 │
-│ 21-00 ··················        0 │ 04.09. ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿····    41.2M │ KW 31 ··················        0 │
-│ 00-03 ⣿⣿⣿···············    1.94M │ 05.09. ⣿⣿················     6.4M │ KW 32 ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿········     112M │
-│ 03-06 ··················        0 │ 06.09. ··················        0 │ KW 33 ⣿⣿⣿⣿⣿⣿⣿⣿··········    87.4M │
-│ 06-09 ⣿⣿⣿⣿⣿⣿············    4.26M │ 07.09. ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿    52.9M │ KW 34 ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿·····   143.9M │
-│ 09-12 ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇···    9.87M │ 08.09. ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿·····    37.6M │ KW 35 ⣿⣿⣿⣿⣿⣿⣿⣿⡇·········    96.2M │
-│ 12-15 ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿    12.4M │ 09.09. ⣿⣿⣿···············    9.44M │ KW 36 ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿·······   121.5M │
-│ 15-18 ⣿⣿⣿⣿⣿⣿⣿⡇··········    5.02M │ 10.09. ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇······   33.61M │ KW 37 ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿  199.45M │
+│ 00-03 ··················        0 │ 04.09. ⣿⣿⣿⣿⣿⣿············    18.3M │ KW 30 ··················        0 │
+│ 03-06 ··················        0 │ 05.09. ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿····    41.2M │ KW 31 ··················        0 │
+│ 06-09 ⣿⣿⣿···············    1.94M │ 06.09. ⣿⣿················     6.4M │ KW 32 ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿········     112M │
+│ 09-12 ··················        0 │ 07.09. ··················        0 │ KW 33 ⣿⣿⣿⣿⣿⣿⣿⣿··········    87.4M │
+│ 12-15 ⣿⣿⣿⣿⣿⣿············    4.26M │ 08.09. ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿    52.9M │ KW 34 ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿·····   143.9M │
+│ 15-18 ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇···    9.87M │ 09.09. ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿·····    37.6M │ KW 35 ⣿⣿⣿⣿⣿⣿⣿⣿⡇·········    96.2M │
+│ 18-21 ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿    12.4M │ 10.09. ⣿⣿⣿···············    9.44M │ KW 36 ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿·······   121.5M │
+│ 21-00 ⣿⣿⣿⣿⣿⣿⣿⡇··········    5.02M │ 11.09. ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇······   33.61M │ KW 37 ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿  199.45M │
 └───────────────────────────────────┴────────────────────────────────────┴───────────────────────────────────┘
 ```
 
@@ -76,6 +76,7 @@ Any directory on your `PATH` will do; a symlink keeps you on the latest pull.
 claude-usage          # print once
 claude-usage -w       # live view, refresh every 60 s
 claude-usage -w 15    # live view, refresh every 15 s
+claude-usage --export # numbers as JSON, for other machines
 claude-usage -h       # short help
 ```
 
@@ -168,6 +169,119 @@ Two sources:
 Counted are assistant messages carrying a `usage` field; a message total is
 `input_tokens + output_tokens + cache_read_input_tokens +
 cache_creation_input_tokens`, deduplicated by message id.
+
+## Multiple machines
+
+`claude-usage` can pull the numbers from other machines you use Claude Code on
+and fold them into one view. Each machine exports its own figures over SSH;
+nothing runs as a daemon and no conversation content leaves the remote.
+
+```
+┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ Claude Code — Max 5x                                                             277 Prompts heute · Stand 21:20:39 CEST │
+├──────────────────────┬───────┬──────────────────────────────────────────────────────────────────────┬────────────────────┤
+│ Session (5-hour)     │   42% │ ████████████████████████████········································ │ Reset 11.09. 23:30 │
+│ Weekly (7-day)       │   61% │ █████████████████████████████████████████··························· │ Reset 15.09. 21:20 │
+│ Opus Weekly          │   23% │ ███████████████····················································· │ Reset 15.09. 21:20 │
+├──────────────────────┴───────┴───────────┬────────────┬───────────┬───────────┬───────────┬─────────┴───────┬────────────┤
+│ Tokens                                   │ Gerät      │     heute │      24 h │    gesamt │ seit            │ Projekt    │
+├──────────────────────────────────────────┼────────────┼───────────┼───────────┼───────────┼─────────────────┼────────────┤
+│ Alle Sessions                            │            │    45.51M │   51.692M │           │                 │            │
+├──────────────────────────────────────────┼────────────┼───────────┼───────────┼───────────┼─────────────────┼────────────┤
+│ payment retry backoff                    │ workstati… │    24.31M │    24.31M │     31.8M │ heute 11:00     │ ~/code/api │
+│ swift ui polish                          │ laptop     │     11.9M │     11.9M │     44.2M │ heute 10:00     │ ~/dev/app  │
+│ flaky integration tests                  │ workstati… │     6.12M │     9.44M │     58.7M │ gestern 16:00   │ ~/code/api │
+│ docs rewrite onboarding                  │ workstati… │     3.18M │     3.18M │     3.18M │ heute 09:00     │ ~/code/web │
+│ release notes                            │ laptop     │         0 │     2.05M │     2.05M │ gestern 18:00   │ ~/dev/app  │
+│ log parser prototype                     │ workstati… │         0 │    812.4k │    812.4k │ gestern 14:00   │ ~          │
+├────────────────────────────────────────┬─┴────────────┴───────────┴───────────┴──┬────────┴─────────────────┴────────────┤
+│ 24 h · 3 h je Zeile                    │ 8 Tage                                  │ 8 Wochen                              │
+├────────────────────────────────────────┼─────────────────────────────────────────┼───────────────────────────────────────┤
+│ 00-03 ·······················        0 │ 04.09. ⣿⣿⣿⣿⣿⣿⣿⣿···············    18.3M │ KW 30 ······················        0 │
+│ 03-06 ·······················        0 │ 05.09. ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿·····    41.2M │ KW 31 ······················        0 │
+│ 06-09 ⣿⣿⣿⡇···················    1.94M │ 06.09. ⣿⣿⣿····················     6.4M │ KW 32 ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇·········     112M │
+│ 09-12 ·······················        0 │ 07.09. ·······················        0 │ KW 33 ⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇············    87.4M │
+│ 12-15 ⣿⣿⣿⣿⣿⣿⣿⣿···············    4.26M │ 08.09. ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿    52.9M │ KW 34 ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿······   143.9M │
+│ 15-18 ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇····    9.87M │ 09.09. ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇······    37.6M │ KW 35 ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇···········    96.2M │
+│ 18-21 ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿    12.4M │ 10.09. ⣿⣿⣿⣿···················    9.44M │ KW 36 ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇········   121.5M │
+│ 21-00 ⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇·············    5.02M │ 11.09. ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇········   33.61M │ KW 37 ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿  199.45M │
+└────────────────────────────────────────┴─────────────────────────────────────────┴───────────────────────────────────────┘
+```
+
+A `Gerät` (device) column appears as soon as a remote is configured, and the
+totals, the session list and all three history columns cover every machine.
+
+**What already works without any of this:** the limit bars come from Anthropic's
+account-level usage endpoint, so they *already* include every machine signed in
+to the same account. Only the transcript-derived numbers are per-machine.
+
+### Setup
+
+On the **remote** machine, install the script and make sure it runs:
+
+```bash
+git clone https://github.com/disy-mk/claude-usage.git
+ln -s "$PWD/claude-usage/claude-usage" /usr/local/bin/claude-usage   # or ~/.local/bin
+claude-usage --export | head -c 200
+```
+
+Authorize a key for it. A dedicated key locked to the export command is worth
+the extra minute — it cannot open a shell or forward anything:
+
+```
+command="claude-usage --export",no-agent-forwarding,no-port-forwarding,no-pty,no-X11-forwarding ssh-ed25519 AAAA... claude-usage
+```
+
+On the **local** machine, describe the remote in
+`~/.config/claude-usage/config.json`:
+
+```json
+{
+  "device": "workstation",
+  "remotes": [
+    { "label": "laptop", "ssh": "claude-mac" }
+  ]
+}
+```
+
+`ssh` is anything your SSH client understands — `user@host`, an IP, or a `Host`
+alias from `~/.ssh/config`, which is the tidier place for the key and port.
+`command` may be added per remote if the binary lives somewhere unusual
+(default: `claude-usage --export`). `device` names *this* machine in the column;
+it defaults to the hostname.
+
+### What gets transferred
+
+`claude-usage --export` prints a compact JSON record — roughly 1.5 KB — holding
+only counters, session titles, working directories and timestamps. No prompts,
+no responses, no file contents from the transcripts. Run it once and read it
+yourself if you want to be sure.
+
+### When the remote is unreachable
+
+The last successful export is cached under `~/.cache/claude-usage/`. If a
+machine cannot be reached, its cached numbers keep being used and a line under
+the table says so, with the age of the data:
+
+```
+laptop: nicht erreichbar (ConnectTimeout), Stand 11.09. 18:06 (vor 3 h 12 min)
+```
+
+With no cache at all the row reads `keine Zahlen von dort` and the totals simply
+omit that machine. A failing remote never blocks the view: each is fetched in
+its own thread with a 5-second connect timeout and a 20-second ceiling.
+
+### Limits of the merge
+
+- **Same time zone assumed.** Day boundaries and 3-hour blocks are cut on each
+  machine's own clock. If the offsets differ, the grids cannot be aligned; the
+  tool detects this and says `andere Zeitzone … Raster passt nicht` instead of
+  quietly adding up mismatched buckets.
+- **`gesamt` stays per-session**, so a session that ran on one machine shows its
+  lifetime from that machine only.
+- **Sessions are not deduplicated across machines.** They have distinct ids, so
+  this only matters if you sync `~/.claude` itself between machines — then the
+  same session would be counted twice. Don't do both.
 
 ## Caveats
 
