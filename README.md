@@ -180,6 +180,31 @@ Counted are assistant messages carrying a `usage` field; a message total is
 `input_tokens + output_tokens + cache_read_input_tokens +
 cache_creation_input_tokens`, deduplicated by message id.
 
+### What each half covers
+
+The two halves have different scope, and the difference is easy to misread:
+
+- **The limit bars are account-wide.** They come from Anthropic's OAuth usage
+  endpoint, which reports the subscription's own windows. Every surface signed
+  in to that account counts toward them — claude.ai chat and Cowork included,
+  on every machine.
+- **Everything below the bars is Claude Code only**, because it is computed
+  from local transcripts, and only Claude Code writes those.
+
+A heavy day in the web app therefore moves the bars without adding a single row
+to the table. That is not a hole in the scan; there is nothing local to scan.
+
+A breakdown by surface is not obtainable either. The payload has keys for one —
+`seven_day_cowork`, `seven_day_breakdown`, and a `scope.surface` on every entry
+in `limits[]` — but all of them came back null on the account this was checked
+against. The response carries no token counts anywhere, only utilization
+percentages and currency amounts, so a "Cowork: N tokens" row is not something
+the server could answer even in principle.
+
+One caveat on the weekly bar: the collector prefers a `seven_day_oauth_apps`
+bucket over the plain `seven_day` one wherever the account has it. On an account
+that does, the weekly bar covers OAuth apps alone rather than everything.
+
 ## Multiple machines
 
 `claude-usage` can pull the numbers from other machines you use Claude Code on
