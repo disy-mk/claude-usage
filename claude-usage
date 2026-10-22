@@ -12,6 +12,7 @@ Aufruf:  claude-usage            einmalig
 
 from __future__ import annotations
 
+import bisect
 import datetime as dt
 import json
 import os
@@ -149,7 +150,7 @@ def build_layout(with_device: bool = False) -> SimpleNamespace:
         inner=inner,
         with_device=with_device,
         with_project=len(cols) > (6 if with_device else 5),
-        limits=(22, 7, 32 + extra, 20),          # Fenster, Prozent, Balken, Reset
+        limits=(22, 7, 17 + extra, 14, 20),      # Fenster, Prozent, Balken, Code, Reset
         tokens=tuple(cols),
         graph=(27 + share[0], 28 + share[1], 27 + share[2]),
     )
@@ -174,7 +175,16 @@ def tokens(n: int) -> str:
 
 
 def bar(pct: float, width: int) -> str:
-    return paint("█" * int(pct * width), width, "·")
+    """Wie dots(), nur mit Blockzeichen: halbe Schritte und nie leer bei > 0.
+
+    Ohne das fiele ein kleiner Prozentwert in einem schmalen Terminal auf null
+    Blöcke zurück und sähe aus wie gar kein Verbrauch.
+    """
+    steps = round(pct * width * 2)
+    if pct > 0 and steps == 0:
+        steps = 1
+    full, half = divmod(min(steps, width * 2), 2)
+    return paint("█" * full + ("▌" if half else ""), width, "·")
 
 
 # ------------------------------------------------------------------ Tabelle
@@ -303,14 +313,14 @@ def scan(projects: Path) -> dict:
     today = now.date()
     cutoff = now - dt.timedelta(hours=WINDOW_HOURS)
 
-    messages: dict[str, tuple] = {}   # message id -> (session, ts, total)
+    messages: dict[str, tuple] = {}   # message id -> (session, ts, total, model)
     starts: dict[str, dt.datetime] = {}
     cwds: dict[str, str] = {}
     titles: dict[str, tuple] = {}   # session -> (Rang, Titel)
 
     if not projects.is_dir():
         empty = [("", "", 0, None)] * GRAPH_ROWS
-        return {"total_today": 0, "total_window": 0, "sessions": [],
+        return {"total_today": 0, "total_window": 0, "sessions": [], "timeline": [],
                 "prompts_today": 0, "graph": (empty, empty, empty)}
 
     for path in sorted(projects.rglob("*.jsonl")):
@@ -365,7 +375,10 @@ def scan(projects: Path) -> dict:
                     continue
 
                 key = str(message.get("id") or entry.get("messageId") or f"{path}:{number}")
-                messages[key] = (str(session or path), stamp, total)
+                # Normalisiert abgelegt; einziger Abnehmer ist der Modellfilter
+                # der Limit-Fenster.
+                model = model_key(str(message.get("model") or entry.get("model") or ""))
+                messages[key] = (str(session or path), stamp, total, model)
 
     # Zeitraster der Graphen. Taktgebunden statt relativ zu "jetzt", damit die
     # Beschriftung stimmt — der jüngste Block ist dadurch noch unvollständig.
@@ -380,7 +393,7 @@ def scan(projects: Path) -> dict:
 
     per_session: dict[str, dict] = {}
     total_today = total_window = prompts_today = 0
-    for session, stamp, total in messages.values():
+    for session, stamp, total, _model in messages.values():
         row = per_session.setdefault(session, {"today": 0, "window": 0, "lifetime": 0, "last": None})
         row["lifetime"] += total
         if stamp:
@@ -421,6 +434,9 @@ def scan(projects: Path) -> dict:
         "total_today": total_today,
         "total_window": total_window,
         "prompts_today": prompts_today,
+        # Für die Limit-Fenster, deren Grenzen erst der Endpoint liefert.
+        "timeline": sorted((stamp, total, model)
+                           for _s, stamp, total, model in messages.values() if stamp),
         "sessions": sessions,
         # Jeder Eintrag: (Schluessel, Beschriftung, Wert, Farbe). Der Schluessel
         # ist absolut, damit sich das Raster eines anderen Rechners zuordnen
@@ -623,6 +639,61 @@ def merge_remote(stats: dict, payload: dict) -> None:
     stats["graph"] = tuple(merged)
 
 
+# Der Endpoint nennt nur den Reset-Zeitpunkt, nicht die Fensterlänge. Die
+# steckt in der Beschriftung, die der Collector aus `kind` baut.
+LIMIT_SPANS = (("hour", 5 / 24), ("session", 5 / 24), ("month", 30), ("week", 7), ("day", 7))
+
+
+def limit_span(label: str):
+    """Fensterlänge zu einer Limit-Beschriftung, oder None."""
+    text = label.lower()
+    for needle, days in LIMIT_SPANS:
+        if needle in text:
+            return dt.timedelta(days=days)
+    return None
+
+
+def model_key(text: str) -> str:
+    """Modellnamen vergleichbar machen.
+
+    Der Endpoint schreibt "Opus 5", die Transcripts "claude-opus-5", und ein
+    Anzeigename kann einen Zusatz in Klammern tragen. Verglichen wird deshalb
+    nur die Buchstaben-Ziffern-Folge vor einer Klammer.
+    """
+    return re.sub(r"[^a-z0-9]", "", text.split("(")[0].lower())
+
+
+def limit_model(limit: dict):
+    """Modellname eines modellgebundenen Limits, sonst None.
+
+    Nur die gebundenen Einträge tragen ein `title`; die flachen Fenster des
+    Accounts haben keins. Der Titel ist "<Modell> <Fenster>".
+    """
+    title = str(limit.get("title") or "").strip()
+    if not title:
+        return None
+    for window in ("Weekly", "Monthly", "Session"):
+        if title.endswith(" " + window):
+            return model_key(title[: -len(window) - 1])
+    return model_key(title)
+
+
+def window_tokens(timeline: list, start, until, model=None) -> int:
+    """Token aus den Transcripts zwischen zwei Zeitpunkten.
+
+    Deckt nur Claude Code auf diesem Rechner ab — der Prozentwert daneben misst
+    den ganzen Account. Beides steht bewusst nebeneinander, nicht übereinander.
+    """
+    begin = bisect.bisect_left(timeline, (start,))
+    total = 0
+    for stamp, value, name in timeline[begin:]:
+        if stamp > until:
+            break
+        if model is None or model in name:
+            total += value
+    return total
+
+
 def limits() -> dict:
     """Limits vom Omarchy-Collector.
 
@@ -712,14 +783,22 @@ def render() -> str:
     rows = record.get("limits") or []
     out.append(separator((lay.inner,), lay.limits if rows else (lay.inner,), lay.inner))
     if rows:
+        timeline = stats["timeline"]
         for limit in rows:
             pct = float(limit.get("percent") or 0)
             reset = parse_ts(limit.get("resetsAt"))
+            label = str(limit.get("label", ""))
+            span = limit_span(label)
+            share = ""
+            if reset and span:
+                used = window_tokens(timeline, reset - span, stamp, limit_model(limit))
+                share = f"Code {tokens(used)}"
             out.append(row([
-                cell(str(limit.get("label", "")), lay.limits[0]),
+                cell(label, lay.limits[0]),
                 cell(f"{int(pct * 100)}%", lay.limits[1], right=True),
                 cell(bar(pct, lay.limits[2] - 2), lay.limits[2]),
-                cell(f"Reset {reset:%d.%m. %H:%M}" if reset else "—", lay.limits[3]),
+                cell(share, lay.limits[3], right=True),
+                cell(f"Reset {reset:%d.%m. %H:%M}" if reset else "—", lay.limits[4]),
             ]))
     else:
         hint = record.get("authHelpText") or record.get("note") or "Keine Limits verfügbar."
